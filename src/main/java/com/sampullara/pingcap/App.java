@@ -7,101 +7,16 @@ import msgpb.Msgpb;
 import pdpb.Pdpb;
 
 import java.io.*;
-import java.net.Socket;
-import java.security.SecureRandom;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.atomic.LongAdder;
+
+import static com.sampullara.pingcap.RPC.RPCType.KV;
+import static com.sampullara.pingcap.RPC.RPCType.PD;
 
 /**
  * Hello world!
  */
 public class App {
-
-  private static LongAdder messageId = new LongAdder();
-
-  static {
-    messageId.add(new SecureRandom().nextLong());
-  }
-
-  private static ThreadLocal<ByteArrayOutputStream> cachedBaos = new ThreadLocal<ByteArrayOutputStream>() {
-    @Override
-    protected ByteArrayOutputStream initialValue() {
-      return new ByteArrayOutputStream();
-    }
-
-    @Override
-    public ByteArrayOutputStream get() {
-      ByteArrayOutputStream baos = super.get();
-      baos.reset();
-      return baos;
-    }
-  };
-
-  public static class RPCConnection {
-    private final OutputStream os;
-    private final InputStream is;
-
-    public RPCConnection(String host, int port, String type) throws IOException {
-      Socket socket = new Socket(host, port);
-      os = new BufferedOutputStream(socket.getOutputStream());
-      is = new BufferedInputStream(socket.getInputStream());
-
-      switch (type) {
-        case "pd":
-          os.write(("GET /" + type + "/rpc HTTP/1.0\r\n\r\n").getBytes());
-          os.flush();
-          break;
-        default:
-      }
-    }
-
-    public Pdpb.Response send(Pdpb.Request request) throws IOException {
-      return send(Msgpb.Message.newBuilder()
-              .setMsgType(Msgpb.MessageType.PdReq)
-              .setPdReq(request).build())
-              .getPdResp();
-    }
-
-    public Msgpb.Message send(Msgpb.Message message) throws IOException {
-      // Write the message
-      ByteArrayOutputStream baos = cachedBaos.get();
-      message.writeTo(baos);
-      writeHeader(os, baos.size());
-      baos.writeTo(os);
-      os.flush();
-
-      // Get the response — later this needs to be async
-      byte[] responseBytes = readHeader(is);
-      return Msgpb.Message.parseFrom(responseBytes);
-    }
-
-    private static void writeHeader(OutputStream os, int length) throws IOException {
-      DataOutputStream dos = new DataOutputStream(os);
-      // Magic value
-      dos.write(new byte[]{(byte) 0xda, (byte) 0xf4});
-      // Version
-      dos.writeShort(1);
-      // Message length
-      dos.writeInt(length);
-      // Message Id
-      dos.writeLong(messageId.longValue());
-      // Go to the next message id
-      messageId.increment();
-    }
-
-    private static byte[] readHeader(InputStream is) throws IOException {
-      DataInputStream dis = new DataInputStream(is);
-      int magic = dis.readShort();
-      int version = dis.readShort();
-      int length = dis.readInt();
-      long id = dis.readLong();
-      byte[] bytes = new byte[length];
-      dis.readFully(bytes);
-      return bytes;
-    }
-
-  }
 
   private static Pdpb.Request.Builder createRequest(Pdpb.CommandType cmdType, long clusterId) {
     return Pdpb.Request.newBuilder()
@@ -113,7 +28,7 @@ public class App {
 
 
   public static void main(String[] args) throws IOException {
-    RPCConnection pdRPC = new RPCConnection("127.0.0.1", 2379, "pd");
+    RPC pdRPC = new RPC("127.0.0.1", 2379, PD);
 
     ByteString key = ByteString.copyFrom("foo", "UTF-8");
     ByteString value = ByteString.copyFrom("bar", "UTF-8");
@@ -145,7 +60,7 @@ public class App {
 
       System.out.println(address);
 
-      RPCConnection kvRPC = new RPCConnection(host, port, "kv");
+      RPC kvRPC = new RPC(host, port, KV);
       {
         Kvrpcpb.CmdRawPutRequest.Builder putReq = Kvrpcpb.CmdRawPutRequest.newBuilder();
         putReq.setKey(key);
