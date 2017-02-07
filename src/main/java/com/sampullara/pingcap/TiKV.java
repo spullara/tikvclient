@@ -74,6 +74,17 @@ public class TiKV implements DB {
     return f.apply(tx);
   }
 
+  public long getTimestamp() {
+    // The transaction starts. When the transaction starts, the client must obtain the current timestamp (startTS)
+    // from TSO. Because TSO guarantees the monotonic increasing of the timestamp, startTS can be used
+    // to identify the time series of the transaction.
+    try {
+      return pdRPC.send(createRequest(Pdpb.CommandType.Tso, clusterId).build()).getTso().getTimestamp().getLogical();
+    } catch (IOException e) {
+      throw new TiException("Failed to get timestamp for transaction", e);
+    }
+  }
+
   private static Pdpb.Request.Builder createRequest(Pdpb.CommandType cmdType, long clusterId) {
     return Pdpb.Request.newBuilder()
             .setCmdType(cmdType)
@@ -89,8 +100,7 @@ public class TiKV implements DB {
     ByteString key = ByteString.copyFrom(k);
     ByteString value = ByteString.copyFrom(v);
 
-    GetLocation getLocation = new GetLocation(key).invoke();
-
+    GetLocation getLocation = getKeyLocation(key);
     Kvrpcpb.Context context = getLocation.getContext();
     RPC kvRPC = getLocation.getKvRPC();
 
@@ -115,7 +125,7 @@ public class TiKV implements DB {
   @Override
   public byte[] get(byte[] k) {
     ByteString key = ByteString.copyFrom(k);
-    GetLocation getLocation = new GetLocation(key).invoke();
+    GetLocation getLocation = getKeyLocation(key);
     Kvrpcpb.Context context = getLocation.getContext();
     RPC kvRPC = getLocation.getKvRPC();
 
@@ -142,7 +152,11 @@ public class TiKV implements DB {
     }
   }
 
-  private class GetLocation {
+  public GetLocation getKeyLocation(ByteString key) {
+    return new GetLocation(key).invoke();
+  }
+
+  class GetLocation {
     private ByteString key;
     private RPC kvRPC;
     private Kvrpcpb.Context context;
@@ -175,10 +189,11 @@ public class TiKV implements DB {
       long storeId = getRegion.getLeader().getStoreId();
 
       Kvrpcpb.Context.Builder contextBuilder = Kvrpcpb.Context.newBuilder();
-      Optional<Metapb.Peer> first = getRegion.getRegion().getPeersList().stream().filter(p -> p.getId() == getRegion.getLeader().getId()).findFirst();
+      Metapb.Region region = getRegion.getRegion();
+      Optional<Metapb.Peer> first = region.getPeersList().stream().filter(p -> p.getId() == getRegion.getLeader().getId()).findFirst();
       first.ifPresent(contextBuilder::setPeer);
-      contextBuilder.setRegionId(getRegion.getRegion().getId());
-      contextBuilder.setRegionEpoch(getRegion.getRegion().getRegionEpoch());
+      contextBuilder.setRegionId(region.getId());
+      contextBuilder.setRegionEpoch(region.getRegionEpoch());
 
       Pdpb.Response getStore;
       try {
